@@ -16,6 +16,10 @@ spring:
     password: ${chunsik.db.password}
     hikari:
       maximum-pool-size: 15
+  data:
+    redis:
+      host: ${chunsik.redis.host}
+      port: ${chunsik.redis.port}
   mail:
     host: smtp.gmail.com
     port: 587

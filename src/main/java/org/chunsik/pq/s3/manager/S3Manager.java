@@ -9,9 +9,12 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
@@ -22,6 +25,7 @@ import java.util.UUID;
 @Component
 public class S3Manager {
     private final S3Client s3Client;
+    private static final String CF_URL_FORMAT = "https://cdn.qqqq.world/%s";
 
     // 파일 업로드
     @Value("${cloud.aws.s3.bucket}")
@@ -36,30 +40,40 @@ public class S3Manager {
                 .contentType("image/jpg")
                 .build();
 
-        String s3Url = makeS3Url(fullFileName);
+        String objectKey = putObjectRequest.key();
+
+        // CloudFront GET URL 생성
+        String cloudFrontUrl = String.format(CF_URL_FORMAT, objectKey);
 
         s3Client.putObject(putObjectRequest, RequestBody.fromFile(file));
 
-        return new S3UploadResponseDTO(fullFileName, s3Url);
+
+        return new S3UploadResponseDTO(fullFileName, cloudFrontUrl);
     }
 
-    public void deleteFile(String fileDir) {
-        String baseUrl = "https://chunsik-dev.s3.ap-northeast-2.amazonaws.com/";
-        String fileName = fileDir.replace(baseUrl, ""); // ticket 디렉토리가 아닌 다른 디렉토리의 이미지를 삭제할 땐 파싱방식을 그거에 맞게 바꿔야 함. (fileName = 디렉토리/이미지명 형식)
+    public void deleteFile(String fileUrl) {
+        String s3Key = extractS3KeyFromUrl(fileUrl);
         DeleteObjectRequest request = DeleteObjectRequest.builder()
                 .bucket(bucketName)
-                .key(fileName)
+                .key(s3Key)
                 .build();
         s3Client.deleteObject(request);
+    }
+
+    private String extractS3KeyFromUrl(String fileUrl) {
+        try {
+            // URL 객체를 사용해 경로 부분을 추출
+            URL url = new URL(fileUrl);
+            // URL의 path 부분이 '/디렉토리/파일명' 형식
+            return url.getPath().substring(1); // 첫 번째 슬래시('/')를 제거
+        } catch (MalformedURLException e) {
+            throw new IllegalArgumentException("Unavailable url format: " + fileUrl, e);
+        }
     }
 
     private String generateFileName(String prefix) {
         String filename = UUID.randomUUID() + ".jpg"; // UUID로 대체하여 고유한 파일 이름을 생성
         return prefix + "/" + filename;
-    }
-
-    private String makeS3Url(String fullFileName) {
-        return String.format("https://%s.s3.%s.amazonaws.com/%s", bucketName, "ap-northeast-2", fullFileName);
     }
 
     // 파일 다운로드

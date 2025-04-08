@@ -12,9 +12,9 @@ permissions:
     group: ec2-user
 
 hooks:
-  AfterInstall:
-    - location: scripts/prod/stop.sh
-      timeout: 60
   ApplicationStart:
     - location: scripts/prod/start.sh
       timeout: 60
+  BeforeInstall:
+    - location: scripts/prod/cleanup.sh
+      timeout: 120

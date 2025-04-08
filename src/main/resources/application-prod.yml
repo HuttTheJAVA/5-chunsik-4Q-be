@@ -14,6 +14,12 @@ spring:
     url: jdbc:mysql://${chunsik.db.url}:3306/pq
     username: ${chunsik.db.user}
     password: ${chunsik.db.password}
+    hikari:
+      maximum-pool-size: 20
+  data:
+    redis:
+      host: ${chunsik.redis.host}
+      port: ${chunsik.redis.port}
   mail:
     host: smtp.gmail.com
     port: 587
@@ -36,7 +42,6 @@ spring:
 auth-code-expiration-millis: 180000
 server:
   port: 8080
-  forward-headers-strategy: NATIVE
 sentry:
   environment: production
 cloud:
@@ -65,3 +70,11 @@ chunsik:
   server:
     domain: "api.qqqq.world"
     url: "https://${chunsik.server.domain}"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: prometheus, health
+  server:
+    port: 9090

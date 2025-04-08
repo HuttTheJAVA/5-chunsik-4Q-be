@@ -1,17 +1,23 @@
-name: dev CI/CD
-run-name: Develop deploying
-on:
-  push:
-    branches:
-      - dev
-  workflow_dispatch:
+name: dev CI/CD (ECS)
+run-name: Develop deploying (ECS)
 
+on:
+#  push:
+#    branches:
+#      - dev
+  workflow_dispatch:
 
 env:
   AWS_REGION: ap-northeast-2
-  AWS_S3_BUCKET: chunsik-deployments
-  AWS_CODE_DEPLOY_APPLICATION: ${{ vars.AWS_CODE_DEPLOY_APPLICATION }}
-  AWS_CODE_DEPLOY_GROUP: ${{ vars.AWS_CODE_DEPLOY_GROUP }}
+  ECR_REPOSITORY: chunsik/dev/be
+  ECS_SERVICE: chunsik-dev-be-service      # set this to your Amazon ECS service name
+  ECS_CLUSTER: ChunsikDevCluster
+
+  #ECS Original Task
+  ECS_TASK_DEFINITION_ARN: arn:aws:ecs:ap-northeast-2:202533511551:task-definition/chunsik-dev-be-task:20
+
+  # Container Name
+  CONTAINER_NAME: dev-be-container
 
 jobs:
   build-with-gradle:
@@ -21,21 +27,21 @@ jobs:
       - name: dev 브랜치로 이동
         uses: actions/checkout@v3
         with:
-          ref: dev
           token: ${{ secrets.SUBMODULE_SECRET }}
           submodules: true
           fetch-depth: 0
 
-      - name: Create Sentry release
-        uses: getsentry/action-release@v1
-        env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
-          # SENTRY_URL: https://sentry.io/
-        with:
-          environment: dev
-          ignore_missing: true
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create Docker Buildx builder
+        run: docker buildx create --use
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
 
       - name: JDK 17 설치
         uses: actions/setup-java@v3
@@ -43,16 +49,15 @@ jobs:
           java-version: '17'
           distribution: 'corretto'
 
-      - name: gradlew에 실행 권한 부여
-        run: chmod +x ./gradlew
-
-      - name: appspec.yml 세팅
-        run: mv ./appspecs/appspec-dev.yml ./appspec.yml
-
-      - name: 프로젝트 빌드
+      - name: Create Sentry release
+        uses: getsentry/action-release@v1
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: ./gradlew clean build -x test -Dspring.profiles.active=dev
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+        with:
+          environment: dev
+          ignore_missing: true
 
       - name: AWS credential 설정
         uses: aws-actions/configure-aws-credentials@v1
@@ -61,8 +66,43 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_USER_ID }}
           aws-secret-access-key: ${{ secrets.AWS_USER_KEY }}
 
-      - name: S3에 업로드
-        run: aws deploy push --application-name ${{ env.AWS_CODE_DEPLOY_APPLICATION }} --ignore-hidden-files --s3-location s3://$AWS_S3_BUCKET/dev-deploy/$GITHUB_SHA.zip --source .
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
 
-      - name: EC2에 배포
-        run: aws deploy create-deployment --application-name ${{ env.AWS_CODE_DEPLOY_APPLICATION }} --deployment-group-name ${{ env.AWS_CODE_DEPLOY_GROUP }} --s3-location bucket=$AWS_S3_BUCKET,key=dev-deploy/$GITHUB_SHA.zip,bundleType=zip
+      - name: gradlew에 실행 권한 부여
+        run: chmod +x ./gradlew
+
+      - name: Jar 빌드
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: ./gradlew bootJar
+
+      - name: Build & Push Docker image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker buildx build \
+            --platform=linux/arm64 \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            --push \
+            .
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: ECS task definition 작성
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition-arn: ${{ env.ECS_TASK_DEFINITION_ARN }}
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: ECS task 배포
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          codedeploy-appspec: appspec.yaml
